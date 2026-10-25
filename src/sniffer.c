@@ -1,7 +1,9 @@
 #include <pcap.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 
 // cria uma animação curta para a execução
@@ -35,7 +37,6 @@ int main(){
   // a sequência \033[2J limpa a tela, e \033[H move o cursor para a posição superior esquerda
   printf("\033[2J\033[H");
 
-  int tamanho_maximo_do_pacote, tempo_limite;
   pcap_t *secaoDeCaptura;
   char cacheDeErros[PCAP_ERRBUF_SIZE];
   struct pcap_pkthdr cabecalhoInfo;
@@ -82,7 +83,7 @@ int main(){
 
     // cria um nome de arquivo com base no carimbo de data/hora
     char nome_do_arquivo[255];
-    sprintf(nome_do_arquivo, "Pacotes/%d.pcap", cabecalhoInfo.ts.tv_sec);
+    snprintf(nome_do_arquivo, sizeof(nome_do_arquivo), "Pacotes/%ld.pcap", (long)cabecalhoInfo.ts.tv_sec);
 
     // abre um arquivo de despejo para escrever
     pcap_dumper_t *pcapDumper = pcap_dump_open(secaoDeCaptura, nome_do_arquivo);

@@ -1,0 +1,55 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev
+
+      - name: Compilar
+        run: |
+          mkdir -p dist
+          gcc -O2 -Wall -Wextra -o dist/sniffer src/sniffer.c -lpcap
+          strip dist/sniffer
+
+      - name: Empacotar
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="network-sniffer-${VERSION}-linux-x86_64"
+          mkdir -p "dist/$PKG"
+          cp dist/sniffer README.md "dist/$PKG/"
+          tar -C dist -czf "dist/$PKG.tar.gz" "$PKG"
+          cd dist
+          sha256sum "$PKG.tar.gz" > "$PKG.tar.gz.sha256"
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Network Sniffer ${{ github.ref_name }}
+          body: |
+            Binário para Linux x86_64.
+
+            Requer a biblioteca libpcap:
+            - Debian/Ubuntu: sudo apt install libpcap0.8
+            - Fedora: sudo dnf install libpcap
+            - Arch: sudo pacman -S libpcap
+
+            Execute com sudo: sudo ./sniffer
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

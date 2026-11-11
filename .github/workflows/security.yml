@@ -114,3 +114,80 @@ jobs:
             relatorios/
             sarif-results/
           if-no-files-found: ignore
+
+  dast:
+    name: DAST
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev tcpdump
+
+      - name: Build com sanitizers
+        run: |
+          gcc -O1 -g -Wall -Wextra -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -o sniffer-asan src/sniffer.c -lpcap
+
+      - name: Execução dinâmica com tráfego
+        run: |
+          mkdir -p relatorios
+          python3 -m http.server 8080 --bind 127.0.0.1 > relatorios/http.log 2>&1 &
+          HTTP_PID=$!
+          (
+            for _ in $(seq 1 150); do
+              curl -s -o /dev/null --max-time 2 http://127.0.0.1:8080/ || true
+              ping -c 1 -W 1 127.0.0.1 > /dev/null 2>&1 || true
+              sleep 0.1
+            done
+          ) &
+          TRAFFIC_PID=$!
+          set +e
+          sudo env \
+            ASAN_OPTIONS=halt_on_error=1:detect_leaks=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            timeout 60 ./sniffer-asan 2>&1 | tee relatorios/dast.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          kill "$TRAFFIC_PID" "$HTTP_PID" 2>/dev/null || true
+          echo "exit code: $STATUS"
+          exit "$STATUS"
+
+      - name: Validações DAST
+        run: |
+          set -euo pipefail
+          falhar() { echo "::error::$1"; exit 1; }
+
+          if grep -E 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:' relatorios/dast.log; then
+            falhar 'Sanitizers detectaram erro durante a execução'
+          fi
+
+          shopt -s nullglob
+          pcaps=(Pacotes/*.pcap)
+          if [ "${#pcaps[@]}" -eq 0 ]; then
+            falhar 'Nenhum arquivo .pcap gerado'
+          fi
+
+          for arquivo in "${pcaps[@]}"; do
+            pacotes="$(tcpdump -r "$arquivo" 2>/dev/null | wc -l || true)"
+            echo "$arquivo -> $pacotes pacotes"
+            if [ "$pacotes" -eq 0 ]; then
+              falhar "pcap vazio ou corrompido: $arquivo"
+            fi
+          done
+
+      - name: Artefatos DAST
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: capturas-dast
+          path: |
+            Pacotes/
+            relatorios/
+          if-no-files-found: ignore

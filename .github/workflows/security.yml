@@ -1,0 +1,116 @@
+name: Security
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  sast:
+    name: SAST
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck libpcap-dev
+
+      - name: clang-format (formatação)
+        run: |
+          python3 -m pip install --user clang-format==23.1.4
+          "${HOME}/.local/bin/clang-format" --dry-run --Werror src/sniffer.c
+
+      - name: Compilação estrita (-Werror)
+        run: gcc -O2 -Wall -Wextra -Werror -Wconversion -Wshadow -o /tmp/sniffer-strict src/sniffer.c -lpcap
+
+      - name: cppcheck (análise estática)
+        run: |
+          mkdir -p relatorios
+          cppcheck \
+            --enable=warning,performance,portability \
+            --inline-suppr \
+            --xml-version=2 \
+            --suppress=missingIncludeSystem \
+            src/ 2> relatorios/cppcheck.xml || true
+          if [ ! -s relatorios/cppcheck.xml ] || ! grep -q '</results>' relatorios/cppcheck.xml; then
+            echo "::error::cppcheck não gerou relatório válido"
+            exit 1
+          fi
+          cat relatorios/cppcheck.xml
+          if grep -Eq 'severity="(error|warning|performance|portability)"' relatorios/cppcheck.xml; then
+            echo "::error::cppcheck encontrou problemas"
+            exit 1
+          fi
+
+      - name: hadolint (Dockerfile)
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+          ignore: DL3018
+
+      - name: actionlint (workflows)
+        run: |
+          VERSION=1.7.7
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          SC_VERSION=0.10.0
+          curl -fsSL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SC_VERSION}/shellcheck-v${SC_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          PATH="/tmp/shellcheck-v${SC_VERSION}:$PATH" /tmp/actionlint -color
+
+      - name: zizmor (workflows)
+        run: |
+          python3 -m pip install --user zizmor==1.32.0
+          "${HOME}/.local/bin/zizmor" --min-severity low --format github .github/workflows/
+
+      - name: CodeQL init
+        uses: github/codeql-action/init@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: CodeQL build
+        run: gcc -O2 -Wall -Wextra -o /tmp/sniffer-codeql src/sniffer.c -lpcap
+
+      - name: CodeQL analyze
+        uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
+        with:
+          output: sarif-results
+
+      - name: Gate de severidade (SARIF)
+        run: |
+          jq -s -e '
+            [ .[]
+              | .runs[]? as $run
+              | $run.results[]? as $res
+              | ($run.tool.driver.rules[]? | select(.id == $res.ruleId)) as $rule
+              | select(((($rule.properties["security-severity"] // "0") | tonumber) >= 8.0)
+                    or $res.level == "error")
+            ] | length == 0
+          ' sarif-results/*.sarif
+
+      - name: Relatórios SAST
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: relatorios-sast
+          path: |
+            relatorios/
+            sarif-results/
+          if-no-files-found: ignore

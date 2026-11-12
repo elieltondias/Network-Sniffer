@@ -1,0 +1,12 @@
+# Configuração do zizmor (audit dos workflows do GitHub Actions)
+# https://docs.zizmor.sh/configuration/
+rules:
+  # O trigger workflow_run é o mecanismo escolhido para o gate da esteira:
+  # release/container só disparam após o Security Workflow concluir com sucesso
+  # (checado via github.event.workflow_run.conclusion == 'success') e o ref é
+  # resolvido para uma tag v* antes de qualquer publicação. Nenhuma entrada de
+  # dados não confiável é processada pelos workflows disparados.
+  dangerous-triggers:
+    ignore:
+      - container.yml:4
+      - release-linux.yml:4

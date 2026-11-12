@@ -1,9 +1,11 @@
 name: Release Linux
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows:
+      - Security
+    types:
+      - completed
 
 permissions:
   contents: write
@@ -11,10 +13,28 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-22.04
+    if: github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Resolver tag da versão
+        id: tag
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --force --tags origin
+          TAG="$(git tag --points-at "$HEAD_SHA" | grep -E '^v[0-9]' | head -n 1 || true)"
+          if [ -z "$TAG" ]; then
+            echo "::error::Nenhuma tag v* encontrada para o commit $HEAD_SHA"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Instalar dependências
         run: |
@@ -28,8 +48,9 @@ jobs:
           strip dist/sniffer
 
       - name: Empacotar
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           PKG="network-sniffer-${VERSION}-linux-x86_64"
           mkdir -p "dist/$PKG"
           cp dist/sniffer README.md "dist/$PKG/"
@@ -38,9 +59,10 @@ jobs:
           sha256sum "$PKG.tar.gz" > "$PKG.tar.gz.sha256"
 
       - name: Publicar release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          name: Network Sniffer ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Network Sniffer ${{ steps.tag.outputs.tag }}
           body: |
             Binário para Linux x86_64.
 
